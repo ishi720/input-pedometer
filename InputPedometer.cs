@@ -23,6 +23,9 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // WinAPI定義
     // ------------------------------------------------------------
+    /// <summary>
+    /// このツールで使う Win32 API（user32 / kernel32 / shcore）の定数・構造体・関数宣言。
+    /// </summary>
     static class Native
     {
         public const int WH_MOUSE_LL = 14;
@@ -91,13 +94,30 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // モニター情報（位置と物理DPI）
     // ------------------------------------------------------------
+    /// <summary>
+    /// 1台のモニターの位置と物理DPI。ピクセル数を実際の長さに換算するために使う。
+    /// </summary>
     class MonitorSpec
     {
+        /// <summary>仮想スクリーン上でのモニターの範囲（物理ピクセル）。</summary>
         public Rectangle Bounds;
-        public double DpiX;
-        public double DpiY;
-        public bool Estimated; // 物理DPIが取れず96dpiで仮定した場合 true
 
+        /// <summary>横方向の物理DPI（1インチあたりのピクセル数）。</summary>
+        public double DpiX;
+
+        /// <summary>縦方向の物理DPI（1インチあたりのピクセル数）。</summary>
+        public double DpiY;
+
+        /// <summary>
+        /// 物理DPIが取得できず、96dpi と仮定した値を使っている場合は <c>true</c>。
+        /// </summary>
+        public bool Estimated;
+
+        /// <summary>
+        /// モニターハンドルから位置と物理DPIを取得する。
+        /// </summary>
+        /// <param name="hMon"><c>MonitorFromPoint</c> などで得たモニターハンドル。</param>
+        /// <returns>取得したモニター情報。DPIが取れない場合は 96dpi と仮定し、<see cref="Estimated"/> を <c>true</c> にする。</returns>
         public static MonitorSpec FromHandle(IntPtr hMon)
         {
             var spec = new MonitorSpec();
@@ -128,6 +148,12 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // カーソル移動の検知と距離計算
     // ------------------------------------------------------------
+    /// <summary>
+    /// 低レベルマウスフックでカーソルの移動を検知し、移動距離をメートル単位で通知する。
+    /// </summary>
+    /// <remarks>
+    /// 他のプログラムが送った移動（injected）と、1回で <c>MaxJumpMeters</c> を超える移動（ワープ）は数えない。
+    /// </remarks>
     class MouseTracker : IDisposable
     {
         const double MetersPerInch = 0.0254;
@@ -142,8 +168,16 @@ namespace InputPedometer
         bool hasLast;
         Native.POINT last;
 
+        /// <summary>
+        /// カーソルが動いたときに発生する。引数は今回の移動距離（メートル）。
+        /// </summary>
+        /// <remarks>フックのコールバック内で呼ばれるため、ハンドラーでは重い処理をしないこと。</remarks>
         public event Action<double> Moved;
 
+        /// <summary>
+        /// マウスフックを登録して計測を開始する。
+        /// </summary>
+        /// <exception cref="Win32Exception">フックの登録に失敗した場合。</exception>
         public void Start()
         {
             proc = HookProc;
@@ -154,13 +188,21 @@ namespace InputPedometer
             }
         }
 
-        // ディスプレイ構成が変わったら呼ぶ
+        /// <summary>
+        /// モニター情報のキャッシュと直前のカーソル位置を破棄する。
+        /// ディスプレイ構成（解像度・配置・接続台数）が変わったときに呼ぶ。
+        /// </summary>
         public void ResetCache()
         {
             cache.Clear();
             hasLast = false;
         }
 
+        /// <summary>
+        /// 指定した座標があるモニターの情報を返す。一度取得したモニターはキャッシュする。
+        /// </summary>
+        /// <param name="pt">仮想スクリーン上の座標（物理ピクセル）。</param>
+        /// <returns>その座標に最も近いモニターの情報。</returns>
         public MonitorSpec GetSpec(Native.POINT pt)
         {
             IntPtr hMon = Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST);
@@ -210,6 +252,9 @@ namespace InputPedometer
             hasLast = true;
         }
 
+        /// <summary>
+        /// マウスフックを解除して計測を止める。
+        /// </summary>
         public void Dispose()
         {
             if (hook != IntPtr.Zero)
@@ -223,17 +268,28 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // 日付×時間ごとの距離を保存
     // ------------------------------------------------------------
+    /// <summary>
+    /// 移動距離を「日付 × 時（0〜23）」ごとに集計し、CSVファイルに保存する。
+    /// </summary>
+    /// <remarks>CSVの形式は <c>date,hour,meters</c>（例: <c>2026-11-14,9,12.345</c>）。</remarks>
     class DistanceLog
     {
         readonly string path;
         readonly SortedDictionary<string, double[]> days = new SortedDictionary<string, double[]>();
+
+        /// <summary>前回の保存以降に記録が追加されていれば <c>true</c>。</summary>
         public bool Dirty { get; private set; }
 
+        /// <summary>
+        /// 保存先のファイルを指定して初期化する。ファイルの読み込みは <see cref="Load"/> で行う。
+        /// </summary>
+        /// <param name="path">CSVファイルのパス。</param>
         public DistanceLog(string path)
         {
             this.path = path;
         }
 
+        /// <summary>CSVファイルのパス。</summary>
         public string FilePath { get { return path; } }
 
         static string Key(DateTime t)
@@ -252,6 +308,10 @@ namespace InputPedometer
             return hours;
         }
 
+        /// <summary>
+        /// 現在の日時の枠に移動距離を加算する。
+        /// </summary>
+        /// <param name="meters">加算する距離（メートル）。</param>
         public void Add(double meters)
         {
             DateTime now = DateTime.Now;
@@ -259,6 +319,10 @@ namespace InputPedometer
             Dirty = true;
         }
 
+        /// <summary>
+        /// 今日（0時から現在まで）の合計距離を返す。
+        /// </summary>
+        /// <returns>距離（メートル）。</returns>
         public double Today()
         {
             double sum = 0;
@@ -266,12 +330,20 @@ namespace InputPedometer
             return sum;
         }
 
+        /// <summary>
+        /// 現在の時間帯（例: 14:00〜14:59）の合計距離を返す。
+        /// </summary>
+        /// <returns>距離（メートル）。</returns>
         public double ThisHour()
         {
             DateTime now = DateTime.Now;
             return Day(Key(now))[now.Hour];
         }
 
+        /// <summary>
+        /// CSVファイルから記録を読み込み、メモリ上の記録に加算する。
+        /// ファイルがなければ何もしない。形式が合わない行（ヘッダー行など）は読み飛ばす。
+        /// </summary>
         public void Load()
         {
             if (!File.Exists(path)) return;
@@ -288,6 +360,11 @@ namespace InputPedometer
             }
         }
 
+        /// <summary>
+        /// 全期間の記録をCSVファイルに書き出す。距離が0の時間帯は出力しない。
+        /// </summary>
+        /// <remarks>一時ファイルに書いてから置き換えるので、途中で落ちても元のファイルは壊れない。</remarks>
+        /// <exception cref="IOException">ファイルが他のプロセスに使われているなどで書き込めない場合。</exception>
         public void Save()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -313,6 +390,9 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // 画面
     // ------------------------------------------------------------
+    /// <summary>
+    /// メイン画面。1日・1時間ごとの移動距離とモニター情報を表示し、記録を定期的に保存する。
+    /// </summary>
     class MainForm : Form
     {
         readonly MouseTracker tracker = new MouseTracker();
@@ -327,6 +407,10 @@ namespace InputPedometer
         readonly CheckBox chkStartup = new CheckBox();
         readonly Button btnFolder = new Button();
 
+        /// <summary>
+        /// 画面を組み立てる。計測の開始は <see cref="OnLoad"/> で行う。
+        /// </summary>
+        /// <param name="startMinimized"><c>true</c> なら最小化した状態で表示する（自動起動時）。</param>
         public MainForm(bool startMinimized)
         {
             if (startMinimized) WindowState = FormWindowState.Minimized;
@@ -425,7 +509,11 @@ namespace InputPedometer
             lblMonitors.Text = sb.ToString();
         }
 
-        // 「1km234m56cm7mm」のように単位を並べて表示する（0の単位は省略）
+        /// <summary>
+        /// 距離を「1km234m56cm7mm」のように単位を並べた文字列にする。0の単位は省略する。
+        /// </summary>
+        /// <param name="m">距離（メートル）。1mm未満は切り捨てる。</param>
+        /// <returns>整形した文字列。1mm未満なら "0mm"。</returns>
         static string FormatDistance(double m)
         {
             long mm = (long)Math.Floor(m * 1000);
@@ -463,10 +551,15 @@ namespace InputPedometer
     // ------------------------------------------------------------
     // Windows起動時の自動起動（HKCU\...\Run に登録。管理者権限は不要）
     // ------------------------------------------------------------
+    /// <summary>
+    /// Windows起動時の自動起動の設定。
+    /// <c>HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run</c> に登録するので、管理者権限は不要。
+    /// </summary>
     static class Startup
     {
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string ValueName = "InputPedometer";
+        /// <summary>自動起動時に付ける引数。これが付いていると最小化して起動する。</summary>
         public const string MinimizedArg = "--minimized";
 
         static string Command()
@@ -474,6 +567,10 @@ namespace InputPedometer
             return "\"" + Application.ExecutablePath + "\" " + MinimizedArg;
         }
 
+        /// <summary>
+        /// 自動起動が登録されているかを返す。
+        /// </summary>
+        /// <returns>登録されていれば <c>true</c>。</returns>
         public static bool IsEnabled()
         {
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey))
@@ -482,6 +579,10 @@ namespace InputPedometer
             }
         }
 
+        /// <summary>
+        /// 自動起動を登録または解除する。登録時は現在の exe の場所を書き込む。
+        /// </summary>
+        /// <param name="enabled"><c>true</c> で登録、<c>false</c> で解除。</param>
         public static void SetEnabled(bool enabled)
         {
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
@@ -491,7 +592,10 @@ namespace InputPedometer
             }
         }
 
-        // exeを移動した場合に備えて、登録済みならパスを今の場所に合わせる
+        /// <summary>
+        /// 自動起動が登録済みなら、登録されている exe の場所を現在の場所に更新する。
+        /// exe を移動した場合に備えて起動時に呼ぶ。失敗しても例外は投げない。
+        /// </summary>
         public static void RefreshPath()
         {
             try { if (IsEnabled()) SetEnabled(true); }
@@ -499,8 +603,15 @@ namespace InputPedometer
         }
     }
 
+    /// <summary>
+    /// エントリーポイント。
+    /// </summary>
     static class Program
     {
+        /// <summary>
+        /// DPI対応を設定し、二重起動を防いだうえでメイン画面を起動する。
+        /// </summary>
+        /// <param name="args">コマンドライン引数。<see cref="Startup.MinimizedArg"/> があれば最小化して起動する。</param>
         [STAThread]
         static void Main(string[] args)
         {
