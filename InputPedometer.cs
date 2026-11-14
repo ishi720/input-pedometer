@@ -341,6 +341,17 @@ namespace InputPedometer
         }
 
         /// <summary>
+        /// 指定した日の時間帯ごと（0〜23時）の距離を返す。
+        /// </summary>
+        /// <param name="date">対象の日付（時刻部分は無視する）。</param>
+        /// <returns>長さ24の配列のコピー（メートル）。記録がない日はすべて0。</returns>
+        public double[] HoursOf(DateTime date)
+        {
+            double[] hours;
+            return days.TryGetValue(Key(date), out hours) ? (double[])hours.Clone() : new double[24];
+        }
+
+        /// <summary>
         /// CSVファイルから記録を読み込み、メモリ上の記録に加算する。
         /// ファイルがなければ何もしない。形式が合わない行（ヘッダー行など）は読み飛ばす。
         /// </summary>
@@ -406,6 +417,8 @@ namespace InputPedometer
         readonly CheckBox chkTopMost = new CheckBox();
         readonly CheckBox chkStartup = new CheckBox();
         readonly Button btnFolder = new Button();
+        readonly Button btnHourly = new Button();
+        HourlyForm hourlyForm;
 
         /// <summary>
         /// 画面を組み立てる。計測の開始は <see cref="OnLoad"/> で行う。
@@ -421,7 +434,7 @@ namespace InputPedometer
             Text = "Input Pedometer";
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
-            ClientSize = new Size(360, 216);
+            ClientSize = new Size(360, 228);
             Font = new Font("Yu Gothic UI", 9f);
 
             lblToday.Font = new Font("Yu Gothic UI", 20f, FontStyle.Bold);
@@ -455,7 +468,11 @@ namespace InputPedometer
                 System.Diagnostics.Process.Start("explorer.exe", dir);
             };
 
-            Controls.AddRange(new Control[] { lblToday, lblHour, lblMonitors, chkTopMost, chkStartup, btnFolder });
+            btnHourly.Text = "時間別の集計";
+            btnHourly.SetBounds(214, 192, 134, 28);
+            btnHourly.Click += delegate { ShowHourly(); };
+
+            Controls.AddRange(new Control[] { lblToday, lblHour, lblMonitors, chkTopMost, chkStartup, btnFolder, btnHourly });
 
             viewTimer.Interval = 100; // mmまで出すので更新を細かくする
             viewTimer.Tick += delegate { UpdateView(); };
@@ -487,8 +504,21 @@ namespace InputPedometer
 
         void UpdateView()
         {
-            lblToday.Text = "1日: " + FormatDistance(log.Today());
-            lblHour.Text = "1時間: " + FormatDistance(log.ThisHour());
+            lblToday.Text = "1日: " + Units.Format(log.Today());
+            lblHour.Text = "1時間: " + Units.Format(log.ThisHour());
+        }
+
+        void ShowHourly()
+        {
+            // 開いていれば前面に出すだけ（複数開かない）
+            if (hourlyForm != null && !hourlyForm.IsDisposed)
+            {
+                if (hourlyForm.WindowState == FormWindowState.Minimized) hourlyForm.WindowState = FormWindowState.Normal;
+                hourlyForm.Activate();
+                return;
+            }
+            hourlyForm = new HourlyForm(log);
+            hourlyForm.Show(this);
         }
 
         void UpdateMonitorInfo()
@@ -509,27 +539,6 @@ namespace InputPedometer
             lblMonitors.Text = sb.ToString();
         }
 
-        /// <summary>
-        /// 距離を「1km234m56cm7mm」のように単位を並べた文字列にする。0の単位は省略する。
-        /// </summary>
-        /// <param name="m">距離（メートル）。1mm未満は切り捨てる。</param>
-        /// <returns>整形した文字列。1mm未満なら "0mm"。</returns>
-        static string FormatDistance(double m)
-        {
-            long mm = (long)Math.Floor(m * 1000);
-            long km = mm / 1000000;
-            long mt = mm / 1000 % 1000;
-            long cm = mm / 10 % 100;
-            long rest = mm % 10;
-
-            var sb = new StringBuilder();
-            if (km > 0) sb.Append(km).Append("km");
-            if (mt > 0) sb.Append(mt).Append("m");
-            if (cm > 0) sb.Append(cm).Append("cm");
-            if (rest > 0) sb.Append(rest).Append("mm");
-            return sb.Length > 0 ? sb.ToString() : "0mm";
-        }
-
         void SaveIfDirty()
         {
             if (!log.Dirty) return;
@@ -545,6 +554,325 @@ namespace InputPedometer
             tracker.Dispose();
             SaveIfDirty();
             base.OnFormClosing(e);
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 距離の表示用の書式
+    // ------------------------------------------------------------
+    /// <summary>
+    /// 距離（メートル）を画面表示用の文字列にする。
+    /// </summary>
+    static class Units
+    {
+        /// <summary>
+        /// 距離を「1km234m56cm7mm」のように単位を並べた文字列にする。0の単位は省略する。
+        /// </summary>
+        /// <param name="m">距離（メートル）。1mm未満は切り捨てる。</param>
+        /// <returns>整形した文字列。1mm未満なら "0mm"。</returns>
+        public static string Format(double m)
+        {
+            long mm = (long)Math.Floor(m * 1000);
+            long km = mm / 1000000;
+            long mt = mm / 1000 % 1000;
+            long cm = mm / 10 % 100;
+            long rest = mm % 10;
+
+            var sb = new StringBuilder();
+            if (km > 0) sb.Append(km).Append("km");
+            if (mt > 0) sb.Append(mt).Append("m");
+            if (cm > 0) sb.Append(cm).Append("cm");
+            if (rest > 0) sb.Append(rest).Append("mm");
+            return sb.Length > 0 ? sb.ToString() : "0mm";
+        }
+
+        /// <summary>
+        /// グラフの目盛り用に、目盛り間隔に合った単位1つで表す（例: "50cm"、"1.5m"）。
+        /// </summary>
+        /// <param name="m">目盛りの値（メートル）。</param>
+        /// <param name="step">目盛りの間隔（メートル）。単位の選択に使う。</param>
+        public static string Axis(double m, double step)
+        {
+            if (m == 0) return "0";
+            if (step >= 1000) return (m / 1000).ToString("0.##", CultureInfo.InvariantCulture) + "km";
+            if (step >= 1) return m.ToString("0.##", CultureInfo.InvariantCulture) + "m";
+            if (step >= 0.01) return (m * 100).ToString("0.##", CultureInfo.InvariantCulture) + "cm";
+            return (m * 1000).ToString("0.##", CultureInfo.InvariantCulture) + "mm";
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 時間別の棒グラフ
+    // ------------------------------------------------------------
+    /// <summary>
+    /// 0〜23時の距離を棒グラフで描くコントロール。マウスを乗せた時間帯を <see cref="HoverChanged"/> で通知する。
+    /// </summary>
+    class HourlyChart : Control
+    {
+        static readonly Color BarColor = Color.FromArgb(70, 130, 200);
+        static readonly Color NowColor = Color.FromArgb(240, 140, 40);
+        static readonly Color HoverColor = Color.FromArgb(30, 80, 150);
+        static readonly Color GridColor = Color.FromArgb(225, 225, 225);
+
+        double[] values = new double[24];
+        int highlight = -1;
+        int hover = -1;
+
+        /// <summary>マウスを乗せた時間帯が変わったときに発生する。引数は時（0〜23）、外れたら -1。</summary>
+        public event Action<int> HoverChanged;
+
+        public HourlyChart()
+        {
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint
+                | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            BackColor = Color.White;
+        }
+
+        /// <summary>表示する距離（長さ24、メートル）。</summary>
+        public double[] Values
+        {
+            get { return values; }
+            set { values = value; Invalidate(); }
+        }
+
+        /// <summary>強調表示する時間帯（現在の時刻）。強調しないなら -1。</summary>
+        public int Highlight
+        {
+            get { return highlight; }
+            set { if (highlight != value) { highlight = value; Invalidate(); } }
+        }
+
+        /// <summary>マウスを乗せている時間帯。なければ -1。</summary>
+        public int Hover { get { return hover; } }
+
+        Rectangle PlotRect()
+        {
+            return Rectangle.FromLTRB(52, 10, ClientSize.Width - 10, ClientSize.Height - 24);
+        }
+
+        // 目盛り間隔を 1, 2, 5 × 10^n のきりのいい値にする
+        static double NiceStep(double raw)
+        {
+            if (raw <= 0) return 0.01;
+            double exp = Math.Pow(10, Math.Floor(Math.Log10(raw)));
+            double f = raw / exp;
+            double nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+            return nice * exp;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(BackColor);
+            Rectangle plot = PlotRect();
+            if (plot.Width <= 0 || plot.Height <= 0) return;
+
+            double max = 0;
+            foreach (double v in values) max = Math.Max(max, v);
+            double step = NiceStep(max / 4);
+            int ticks = Math.Max(1, (int)Math.Ceiling(max / step - 1e-9));
+            double top = step * ticks;
+
+            // 横の目盛り線と値
+            using (var gridPen = new Pen(GridColor))
+            using (var textBrush = new SolidBrush(SystemColors.GrayText))
+            {
+                var right = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+                for (int i = 0; i <= ticks; i++)
+                {
+                    float y = plot.Bottom - (float)i * plot.Height / ticks;
+                    g.DrawLine(gridPen, plot.Left, y, plot.Right, y);
+                    g.DrawString(Units.Axis(step * i, step), Font, textBrush, new RectangleF(0, y - 10, plot.Left - 6, 20), right);
+                }
+
+                // 時刻のラベル（狭いときは3時間おき）
+                float slot = plot.Width / 24f;
+                int every = slot >= 22 ? 1 : 3;
+                var center = new StringFormat { Alignment = StringAlignment.Center };
+                for (int h = 0; h < 24; h += every)
+                {
+                    g.DrawString(h.ToString(), Font, textBrush, new RectangleF(plot.Left + h * slot, plot.Bottom + 4, slot, 18), center);
+                }
+
+                // 棒
+                float barW = Math.Max(1f, slot * 0.7f);
+                for (int h = 0; h < 24; h++)
+                {
+                    if (values[h] <= 0) continue;
+                    float bh = (float)(values[h] / top * plot.Height);
+                    float x = plot.Left + h * slot + (slot - barW) / 2;
+                    Color c = h == hover ? HoverColor : h == highlight ? NowColor : BarColor;
+                    using (var b = new SolidBrush(c))
+                    {
+                        g.FillRectangle(b, x, plot.Bottom - bh, barW, Math.Max(1f, bh));
+                    }
+                }
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            Rectangle plot = PlotRect();
+            int h = -1;
+            if (plot.Width > 0 && e.X >= plot.Left && e.X < plot.Right && e.Y >= plot.Top && e.Y < plot.Bottom + 20)
+            {
+                h = Math.Min(23, (int)((e.X - plot.Left) / (plot.Width / 24f)));
+            }
+            SetHover(h);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            SetHover(-1);
+        }
+
+        void SetHover(int h)
+        {
+            if (hover == h) return;
+            hover = h;
+            Invalidate();
+            if (HoverChanged != null) HoverChanged(h);
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 時間別の集計画面
+    // ------------------------------------------------------------
+    /// <summary>
+    /// 1日分の距離を時間帯（0〜23時）ごとに棒グラフで表示する画面。日付を切り替えて過去の記録も見られる。
+    /// </summary>
+    class HourlyForm : Form
+    {
+        static readonly CultureInfo Ja = new CultureInfo("ja-JP");
+
+        readonly DistanceLog log;
+        readonly HourlyChart chart = new HourlyChart();
+        readonly Button btnPrev = new Button();
+        readonly Button btnNext = new Button();
+        readonly Button btnToday = new Button();
+        readonly Label lblDate = new Label();
+        readonly Label lblTotal = new Label();
+        readonly Label lblInfo = new Label();
+        readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
+        DateTime date = DateTime.Today;
+
+        /// <summary>
+        /// 画面を組み立てる。最初は今日の記録を表示する。
+        /// </summary>
+        /// <param name="log">表示する記録。</param>
+        public HourlyForm(DistanceLog log)
+        {
+            this.log = log;
+
+            Text = "時間別の集計 - Input Pedometer";
+            Font = new Font("Yu Gothic UI", 9f);
+            ClientSize = new Size(640, 330);
+            MinimumSize = new Size(420, 260);
+            StartPosition = FormStartPosition.CenterParent;
+            ShowInTaskbar = false;
+            KeyPreview = true;
+
+            btnPrev.Text = "◀";
+            btnPrev.SetBounds(12, 10, 32, 28);
+            btnPrev.Click += delegate { MoveDate(-1); };
+
+            lblDate.SetBounds(46, 10, 150, 28);
+            lblDate.TextAlign = ContentAlignment.MiddleCenter;
+            lblDate.Font = new Font("Yu Gothic UI", 11f, FontStyle.Bold);
+
+            btnNext.Text = "▶";
+            btnNext.SetBounds(198, 10, 32, 28);
+            btnNext.Click += delegate { MoveDate(1); };
+
+            btnToday.Text = "今日";
+            btnToday.SetBounds(238, 10, 56, 28);
+            btnToday.Click += delegate { date = DateTime.Today; RefreshView(); };
+
+            lblTotal.SetBounds(300, 10, 328, 28);
+            lblTotal.TextAlign = ContentAlignment.MiddleRight;
+            lblTotal.Font = new Font("Yu Gothic UI", 11f, FontStyle.Bold);
+            lblTotal.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            chart.SetBounds(12, 46, 616, 250);
+            chart.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            chart.HoverChanged += delegate { UpdateInfo(); };
+
+            lblInfo.SetBounds(14, 302, 614, 20);
+            lblInfo.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
+            Controls.AddRange(new Control[] { btnPrev, lblDate, btnNext, btnToday, lblTotal, chart, lblInfo });
+
+            // 表示中が今日なら、計測中の値を反映し続ける
+            refreshTimer.Interval = 1000;
+            refreshTimer.Tick += delegate { if (date == DateTime.Today || chart.Highlight >= 0) RefreshView(); };
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            RefreshView();
+            refreshTimer.Start();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            refreshTimer.Stop();
+            refreshTimer.Dispose();
+            base.OnFormClosed(e);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Left) { MoveDate(-1); e.Handled = true; }
+            else if (e.KeyCode == Keys.Right) { MoveDate(1); e.Handled = true; }
+        }
+
+        void MoveDate(int days)
+        {
+            DateTime d = date.AddDays(days);
+            if (d > DateTime.Today) return; // 未来は表示しない
+            date = d;
+            RefreshView();
+        }
+
+        void RefreshView()
+        {
+            DateTime today = DateTime.Today;
+            double[] hours = log.HoursOf(date);
+            double sum = 0;
+            foreach (double h in hours) sum += h;
+
+            chart.Values = hours;
+            chart.Highlight = date == today ? DateTime.Now.Hour : -1;
+            lblDate.Text = date.ToString("yyyy/MM/dd (ddd)", Ja);
+            lblTotal.Text = "合計: " + Units.Format(sum);
+            btnNext.Enabled = date < today;
+            btnToday.Enabled = date != today;
+            UpdateInfo();
+        }
+
+        void UpdateInfo()
+        {
+            double[] hours = chart.Values;
+            int h = chart.Hover;
+            if (h >= 0)
+            {
+                lblInfo.Text = string.Format("{0}:00〜{0}:59　{1}", h, Units.Format(hours[h]));
+                return;
+            }
+
+            // マウスを乗せていないときは、一番動いた時間帯を出す
+            int peak = -1;
+            for (int i = 0; i < 24; i++)
+            {
+                if (hours[i] > 0 && (peak < 0 || hours[i] > hours[peak])) peak = i;
+            }
+            lblInfo.Text = peak < 0
+                ? "この日の記録はありません"
+                : string.Format("最も動いた時間帯: {0}:00〜{0}:59（{1}）　※棒にマウスを乗せると値を表示", peak, Units.Format(hours[peak]));
         }
     }
 
