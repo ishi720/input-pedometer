@@ -324,17 +324,20 @@ namespace InputPedometer
         readonly Label lblHour = new Label();
         readonly Label lblMonitors = new Label();
         readonly CheckBox chkTopMost = new CheckBox();
+        readonly CheckBox chkStartup = new CheckBox();
         readonly Button btnFolder = new Button();
 
-        public MainForm()
+        public MainForm(bool startMinimized)
         {
+            if (startMinimized) WindowState = FormWindowState.Minimized;
+
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "InputPedometer");
             log = new DistanceLog(Path.Combine(dir, "distance.csv"));
 
             Text = "Input Pedometer";
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
-            ClientSize = new Size(360, 200);
+            ClientSize = new Size(360, 216);
             Font = new Font("Yu Gothic UI", 9f);
 
             lblToday.Font = new Font("Yu Gothic UI", 20f, FontStyle.Bold);
@@ -347,6 +350,19 @@ namespace InputPedometer
             chkTopMost.SetBounds(14, 162, 120, 24);
             chkTopMost.CheckedChanged += delegate { TopMost = chkTopMost.Checked; };
 
+            chkStartup.Text = "Windows起動時に自動で起動";
+            chkStartup.SetBounds(14, 186, 200, 24);
+            chkStartup.Checked = Startup.IsEnabled();
+            chkStartup.CheckedChanged += delegate
+            {
+                try { Startup.SetEnabled(chkStartup.Checked); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("自動起動の設定に失敗しました。\n" + ex.Message, Text);
+                    chkStartup.Checked = Startup.IsEnabled();
+                }
+            };
+
             btnFolder.Text = "記録フォルダを開く";
             btnFolder.SetBounds(214, 160, 134, 28);
             btnFolder.Click += delegate
@@ -355,7 +371,7 @@ namespace InputPedometer
                 System.Diagnostics.Process.Start("explorer.exe", dir);
             };
 
-            Controls.AddRange(new Control[] { lblToday, lblHour, lblMonitors, chkTopMost, btnFolder });
+            Controls.AddRange(new Control[] { lblToday, lblHour, lblMonitors, chkTopMost, chkStartup, btnFolder });
 
             viewTimer.Interval = 100; // mmまで出すので更新を細かくする
             viewTimer.Tick += delegate { UpdateView(); };
@@ -444,10 +460,49 @@ namespace InputPedometer
         }
     }
 
+    // ------------------------------------------------------------
+    // Windows起動時の自動起動（HKCU\...\Run に登録。管理者権限は不要）
+    // ------------------------------------------------------------
+    static class Startup
+    {
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        const string ValueName = "InputPedometer";
+        public const string MinimizedArg = "--minimized";
+
+        static string Command()
+        {
+            return "\"" + Application.ExecutablePath + "\" " + MinimizedArg;
+        }
+
+        public static bool IsEnabled()
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey))
+            {
+                return key != null && key.GetValue(ValueName) != null;
+            }
+        }
+
+        public static void SetEnabled(bool enabled)
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (enabled) key.SetValue(ValueName, Command());
+                else key.DeleteValue(ValueName, false);
+            }
+        }
+
+        // exeを移動した場合に備えて、登録済みならパスを今の場所に合わせる
+        public static void RefreshPath()
+        {
+            try { if (IsEnabled()) SetEnabled(true); }
+            catch (Exception) { /* 失敗しても動作には影響しない */ }
+        }
+    }
+
     static class Program
     {
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             // 座標を物理ピクセルで受け取るため、モニターごとのDPI対応にする
             try { Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
@@ -460,7 +515,9 @@ namespace InputPedometer
                 if (!created) return;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new MainForm());
+                Startup.RefreshPath();
+                bool minimized = Array.IndexOf(args, Startup.MinimizedArg) >= 0;
+                Application.Run(new MainForm(minimized));
             }
         }
     }
