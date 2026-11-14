@@ -9,7 +9,13 @@
 
 ## ビルド
  
-Windowsに標準で入っているコンパイラでビルド
+`build.bat` を実行
+
+```
+build.bat
+```
+
+または、Windowsに標準で入っているコンパイラで直接ビルド
  
 ```
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:InputPedometer.exe InputPedometer.cs
