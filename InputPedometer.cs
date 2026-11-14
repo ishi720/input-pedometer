@@ -403,8 +403,8 @@ namespace InputPedometer
 
         void UpdateView()
         {
-            lblToday.Text = "今日 " + FormatDistance(log.Today());
-            lblHour.Text = string.Format("この1時間: {0}", FormatDistance(log.ThisHour()));
+            lblToday.Text = "1日: " + FormatDistance(log.Today());
+            lblHour.Text = "1時間: " + FormatDistance(log.ThisHour());
         }
 
         void UpdateMonitorInfo()
